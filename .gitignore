@@ -1,0 +1,13 @@
+.gitdata/
+.env
+bin/
+*.log
+go1.*.linux-*.tar.gz
+tmp/
+
+# Keep project documentation and generated documentation artifacts local.
+*.md
+*.MD
+/docs/
+/project-file-guide/
+

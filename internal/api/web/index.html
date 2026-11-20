@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sensor Metrics</title>
+<style>
+  :root { --bg:#0f1419; --panel:#161d26; --line:#24303d; --fg:#d7e0ea; --muted:#7d8b9c; --accent:#4aa8ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.4 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); height:100vh; display:flex; }
+  aside { width:260px; background:var(--panel); border-right:1px solid var(--line); padding:12px; overflow:auto; }
+  main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  h1 { font-size:15px; margin:0 0 10px; }
+  h2 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:16px 0 6px; }
+  input[type=search] { width:100%; padding:6px 8px; background:#0b1015; border:1px solid var(--line); color:var(--fg); border-radius:4px; }
+  .devices { list-style:none; margin:6px 0 0; padding:0; max-height:180px; overflow:auto; border:1px solid var(--line); border-radius:4px; }
+  .devices li { padding:5px 8px; cursor:pointer; border-bottom:1px solid var(--line); }
+  .devices li:hover { background:#1d2836; }
+  .devices li.sel { background:#1f3a57; }
+  label.chk { display:flex; align-items:center; gap:6px; padding:3px 0; cursor:pointer; }
+  .swatch { width:10px; height:10px; border-radius:2px; display:inline-block; }
+  .ranges { display:flex; flex-wrap:wrap; gap:4px; }
+  .ranges button { flex:1 0 auto; padding:4px 8px; background:#0b1015; border:1px solid var(--line); color:var(--fg); border-radius:4px; cursor:pointer; }
+  .ranges button.sel { background:var(--accent); color:#04121f; border-color:var(--accent); }
+  #customRange { display: grid; gap: 5px; margin-top: 10px; }
+  #customRange input { width: 100%; }
+  .chartwrap { flex:1; position:relative; min-height:0; }
+  canvas { width:100%; height:100%; display:block; }
+  .status { padding:6px 12px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; display:flex; gap:16px; }
+  .legend { padding:6px 12px; display:flex; flex-wrap:wrap; gap:14px; border-bottom:1px solid var(--line); }
+  .legend span { display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none; }
+  .legend span.off { opacity:.35; }
+  .tooltip { position:absolute; pointer-events:none; background:#0b1015ee; border:1px solid var(--line); border-radius:4px; padding:6px 8px; font-size:12px; display:none; white-space:nowrap; }
+  .err { color:#ff7b72; padding:8px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Sensor Metrics</h1>
+  <input id="q" type="search" placeholder="Search devices (id or name)">
+  <ul id="devices" class="devices"></ul>
+  <h2>Sensors</h2>
+  <div id="sensors"></div>
+  <h2>Range</h2>
+  <div id="ranges" class="ranges"></div>
+  <form id="customRange">
+    <label>From <input id="from" type="datetime-local" required></label>
+    <label>To <input id="to" type="datetime-local" required></label>
+    <button type="submit">Apply dates</button>
+  </form>
+</aside>
+<main>
+  <div id="legend" class="legend"></div>
+  <div class="chartwrap">
+    <canvas id="chart"></canvas>
+    <div id="tip" class="tooltip"></div>
+  </div>
+  <div class="status">
+    <span id="stDevice">no device</span>
+    <span id="stTier"></span>
+    <span id="stLatency"></span>
+    <span id="stErr" class="err"></span>
+  </div>
+</main>
+<script>
+"use strict";
+const SENSORS = ["cpu","mem","disk","disk_io","net_in","net_out","fan"];
+const COLORS = {cpu:"#4aa8ff",mem:"#f5a524",disk:"#22c55e",disk_io:"#ef4444",net_in:"#a855f7",net_out:"#14b8a6",fan:"#eab308"};
+const RANGES = [
+  ["5m",5*60e3],["15m",15*60e3],["1h",3600e3],["6h",6*3600e3],
+  ["1d",86400e3],["7d",7*86400e3],["30d",30*86400e3],["90d",90*86400e3],["1y",365*86400e3]
+];
+
+const state = {
+  token: new URLSearchParams(location.search).get("token") || localStorage.getItem("ui_token") || "",
+  device: null, devices: [], sensors: new Set(["cpu","mem"]),
+  rangeMs: 3600e3, customRange: null, data: null, hidden: new Set(), hover: -1
+};
+if (state.token) localStorage.setItem("ui_token", state.token);
+
+function headers() { return state.token ? {"X-UI-Token": state.token} : {}; }
+
+async function api(path, signal) {
+  const res = await fetch(path, {headers: headers(), signal});
+  if (res.status === 401) throw new Error("unauthorized: add ?token=... to the URL");
+  if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0,120));
+  return res.json();
+}
+
+function el(id) { return document.getElementById(id); }
+
+function buildSensors() {
+  el("sensors").innerHTML = "";
+  for (const s of SENSORS) {
+    const l = document.createElement("label");
+    l.className = "chk";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = state.sensors.has(s);
+    cb.onchange = () => { cb.checked ? state.sensors.add(s) : state.sensors.delete(s); loadMetrics(); };
+    const sw = document.createElement("span");
+    sw.className = "swatch"; sw.style.background = COLORS[s];
+    l.append(cb, sw, document.createTextNode(s));
+    el("sensors").appendChild(l);
+  }
+}
+
+function buildRanges() {
+  el("ranges").innerHTML = "";
+  for (const [label, ms] of RANGES) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    if (!state.customRange && ms === state.rangeMs) b.classList.add("sel");
+    b.onclick = () => { state.rangeMs = ms; state.customRange = null; buildRanges(); loadMetrics(); };
+    el("ranges").appendChild(b);
+  }
+}
+
+let deviceRequest, metricsRequest;
+async function loadDevices() {
+  deviceRequest?.abort();
+  const request = deviceRequest = new AbortController();
+  try {
+    const q = el("q").value.trim();
+    const data = await api("/v1/devices?limit=50&q=" + encodeURIComponent(q), request.signal);
+    if (request.signal.aborted) return;
+    state.devices = data.items || [];
+    const ul = el("devices");
+    ul.innerHTML = "";
+    for (const d of state.devices) {
+      const li = document.createElement("li");
+      li.textContent = d.id + " · " + d.name;
+      if (state.device === d.id) li.classList.add("sel");
+      li.onclick = () => { state.device = d.id; loadDevices(); loadMetrics(); };
+      ul.appendChild(li);
+    }
+    if (!state.device && state.devices.length) { state.device = state.devices[0].id; loadMetrics(); }
+  } catch (e) { if (!request.signal.aborted) el("stErr").textContent = e.message; }
+}
+
+async function loadMetrics() {
+  if (!state.device) return;
+  metricsRequest?.abort();
+  const request = metricsRequest = new AbortController();
+  state.hover = -1;
+  el("tip").style.display = "none";
+  if (!state.sensors.size) {
+    state.data = null;
+    el("stTier").textContent = "";
+    el("stLatency").textContent = "";
+    el("stErr").textContent = "Select a sensor to draw the chart.";
+    buildLegend();
+    draw();
+    return;
+  }
+  el("stErr").textContent = "";
+  const to = state.customRange?.to ?? Date.now();
+  const from = state.customRange?.from ?? to - state.rangeMs;
+  const sensors = [...state.sensors].join(",");
+  const url = `/v1/devices/${state.device}/metrics?from=${new Date(from).toISOString()}` +
+              `&to=${new Date(to).toISOString()}&sensors=${encodeURIComponent(sensors)}&max_points=2500`;
+  const t0 = performance.now();
+  try {
+    const data = await api(url, request.signal);
+    if (request.signal.aborted) return;
+    data._clientMs = performance.now() - t0;
+    state.data = data;
+    el("stDevice").textContent = "device " + state.device;
+    el("stTier").textContent = "tier " + data.tier + " · bucket " + data.bucket_seconds + "s";
+    el("stLatency").textContent = "load " + data._clientMs.toFixed(0) + " ms · " + (data.ts ? data.ts.length : 0) + " points";
+    buildLegend();
+    draw();
+  } catch (e) {
+    if (!request.signal.aborted) el("stErr").textContent = e.message;
+  }
+}
+
+function buildLegend() {
+  const lg = el("legend");
+  lg.innerHTML = "";
+  if (!state.data) return;
+  for (const s of SENSORS) {
+    if (!state.data.series[s]) continue;
+    const sp = document.createElement("span");
+    if (state.hidden.has(s)) sp.classList.add("off");
+    const sw = document.createElement("span");
+    sw.className = "swatch"; sw.style.background = COLORS[s];
+    sp.append(sw, document.createTextNode(s));
+    sp.onclick = () => { state.hidden.has(s) ? state.hidden.delete(s) : state.hidden.add(s); buildLegend(); draw(); };
+    lg.appendChild(sp);
+  }
+}
+
+const canvas = el("chart");
+const ctx = canvas.getContext("2d");
+const PAD = {l:46, r:14, t:14, b:26};
+
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(r.width * dpr));
+  canvas.height = Math.max(1, Math.floor(r.height * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+window.addEventListener("resize", resize);
+
+function draw() {
+  const r = canvas.getBoundingClientRect();
+  const W = r.width, H = r.height;
+  ctx.clearRect(0, 0, W, H);
+  const data = state.data;
+  const x0 = PAD.l, y0 = PAD.t, x1 = W - PAD.r, y1 = H - PAD.b;
+  // grid + y labels
+  ctx.strokeStyle = "#24303d"; ctx.fillStyle = "#7d8b9c"; ctx.font = "11px system-ui"; ctx.lineWidth = 1;
+  for (let v = 0; v <= 100; v += 20) {
+    const y = y1 - (y1 - y0) * v / 100;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.fillText(v + "%", 6, y + 4);
+  }
+  if (!data || !data.ts || !data.ts.length) return;
+  const ts = data.ts, n = ts.length;
+  const tMin = ts[0], tMax = ts[n-1] || ts[0] + 1000;
+  const span = Math.max(1, tMax - tMin);
+  const X = t => x0 + (x1 - x0) * (t - tMin) / span;
+  const Y = v => y1 - (y1 - y0) * Math.min(100, Math.max(0, v)) / 100;
+
+  // x labels
+  const ticks = 6;
+  for (let i = 0; i <= ticks; i++) {
+    const t = tMin + span * i / ticks;
+    const x = X(t);
+    ctx.fillStyle = "#7d8b9c";
+    const label = fmtTime(t, span);
+    const tw = ctx.measureText(label).width;
+    ctx.fillText(label, Math.min(x1 - tw, Math.max(x0, x - tw/2)), y1 + 17);
+  }
+
+  for (const s of SENSORS) {
+    const ser = data.series[s];
+    if (!ser || state.hidden.has(s)) continue;
+    // Draw each contiguous run separately so the band does not span missing data.
+    ctx.fillStyle = hexA(COLORS[s], 0.10);
+    for (let i = 0; i < n; ) {
+      if (ser.max[i] == null) { i++; continue; }
+      const start = i;
+      ctx.beginPath();
+      ctx.moveTo(X(ts[i]), Y(ser.max[i]));
+      while (++i < n && ser.max[i] != null) ctx.lineTo(X(ts[i]), Y(ser.max[i]));
+      for (let j = i - 1; j >= start; j--) ctx.lineTo(X(ts[j]), Y(ser.min[j]));
+      ctx.closePath();
+      ctx.fill();
+    }
+    // avg line
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < n; i++) {
+      const v = ser.avg[i];
+      if (v == null) { started = false; continue; }
+      const x = X(ts[i]), y = Y(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      if (ser.avg[i - 1] == null && ser.avg[i + 1] == null) ctx.lineTo(x + 1, y);
+    }
+    ctx.strokeStyle = COLORS[s]; ctx.lineWidth = 1.6; ctx.stroke();
+  }
+
+  // crosshair
+  if (state.hover >= 0 && state.hover < n) {
+    const x = X(ts[state.hover]);
+    ctx.strokeStyle = "#3b4a5c"; ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+  }
+}
+
+function fmtTime(ms, span) {
+  const d = new Date(ms);
+  if (span <= 6*3600e3) return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  if (span <= 2*86400e3) return d.toLocaleString([], {month:"short", day:"numeric", hour:"2-digit"});
+  if (span <= 120*86400e3) return d.toLocaleDateString([], {month:"short", day:"numeric"});
+  return d.toLocaleDateString([], {month:"short", year:"2-digit"});
+}
+
+function hexA(hex, a) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+canvas.addEventListener("mousemove", ev => {
+  const data = state.data;
+  if (!data || !data.ts || !data.ts.length) return;
+  const r = canvas.getBoundingClientRect();
+  const x0 = PAD.l, x1 = r.width - PAD.r;
+  const fx = (ev.clientX - r.left - x0) / Math.max(1, x1 - x0);
+  const ts = data.ts, n = ts.length;
+  const tMin = ts[0], span = Math.max(1, ts[n-1] - tMin);
+  const t = tMin + fx * span;
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < n; i++) { const d = Math.abs(ts[i] - t); if (d < bd) { bd = d; best = i; } }
+  state.hover = best;
+  const tip = el("tip");
+  let html = new Date(ts[best]).toLocaleString() + "<br>";
+  for (const s of SENSORS) {
+    const ser = data.series[s];
+    if (!ser || state.hidden.has(s) || ser.avg[best] == null) continue;
+    html += `<span style="color:${COLORS[s]}">■</span> ${s}: ${ser.avg[best].toFixed(2)}%`;
+    if (ser.min[best] != null) html += ` <span style="color:#7d8b9c">(${ser.min[best].toFixed(1)}–${ser.max[best].toFixed(1)})</span>`;
+    html += "<br>";
+  }
+  tip.innerHTML = html;
+  tip.style.display = "block";
+  tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 190) + "px";
+  tip.style.top = (ev.clientY - r.top + 12) + "px";
+  draw();
+});
+canvas.addEventListener("mouseleave", () => { state.hover = -1; el("tip").style.display = "none"; draw(); });
+
+el("q").addEventListener("input", debounce(loadDevices, 250));
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+el("customRange").addEventListener("submit", event => {
+  event.preventDefault();
+  const from = new Date(el("from").value).getTime();
+  const to = new Date(el("to").value).getTime();
+  if (!(from < to) || to - from > RANGES.at(-1)[1]) {
+    el("stErr").textContent = "Choose a valid timestamp range of at most 365 days.";
+    return;
+  }
+  state.customRange = {from, to};
+  buildRanges();
+  loadMetrics();
+});
+buildSensors(); buildRanges(); loadDevices(); resize();
+</script>
+</body>
+</html>

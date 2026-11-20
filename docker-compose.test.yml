@@ -1,0 +1,38 @@
+# Used only with an isolated project name by scripts/compose-test.sh.
+services:
+  timescaledb:
+    ports: !reset []
+  redpanda:
+    ports: !reset []
+  ingest1:
+    ports: !reset []
+    environment:
+      WAL_MAX_BYTES: ${TEST_WAL_MAX_BYTES:-536870912}
+  ingest2:
+    environment:
+      WAL_MAX_BYTES: ${TEST_WAL_MAX_BYTES:-536870912}
+  ingest3:
+    environment:
+      WAL_MAX_BYTES: ${TEST_WAL_MAX_BYTES:-536870912}
+  api:
+    ports: !reset []
+  nginx:
+    # Expose only the temporary test frontend on localhost while the test runs.
+    ports: !override ["127.0.0.1:${TEST_UI_PORT:-18080}:80"]
+  bench:
+    build:
+      context: .
+      target: bench
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    image: monitoring-bench:local
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@timescaledb:5432/metrics?sslmode=disable
+      INGEST_API_KEY: ${INGEST_API_KEY:-dev-api-key-change-me}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-internal-dev-token}
+      UI_TOKEN: ${UI_TOKEN:-}
+    healthcheck:
+      test: ["CMD-SHELL", "test -x /tmp/bench"]
+      interval: 2s
+      timeout: 1s
+      retries: 15
