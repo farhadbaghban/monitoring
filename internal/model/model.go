@@ -6,17 +6,17 @@ import "time"
 var Sensors = []string{"cpu", "mem", "disk", "disk_io", "net_in", "net_out", "fan"}
 
 // Sample is the JSON body accepted by POST /v1/ingest. Pointers distinguish a
-// missing sensor from a legitimate zero.
+// missing sensor from a legitimate zero. Readings are integers from 0 to 100.
 type Sample struct {
-	DeviceID int      `json:"device_id"`
-	TS       string   `json:"ts"`
-	CPU      *float64 `json:"cpu"`
-	Mem      *float64 `json:"mem"`
-	Disk     *float64 `json:"disk"`
-	DiskIO   *float64 `json:"disk_io"`
-	NetIn    *float64 `json:"net_in"`
-	NetOut   *float64 `json:"net_out"`
-	Fan      *float64 `json:"fan"`
+	DeviceID int    `json:"device_id"`
+	TS       string `json:"ts"`
+	CPU      *int8  `json:"cpu"`
+	Mem      *int8  `json:"mem"`
+	Disk     *int8  `json:"disk"`
+	DiskIO   *int8  `json:"disk_io"`
+	NetIn    *int8  `json:"net_in"`
+	NetOut   *int8  `json:"net_out"`
+	Fan      *int8  `json:"fan"`
 }
 
 // WireSample is the Kafka payload. Sensor values are percent x 100; nil means

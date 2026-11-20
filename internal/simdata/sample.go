@@ -7,19 +7,19 @@ import (
 )
 
 type Sample struct {
-	DeviceID int     `json:"device_id"`
-	TS       string  `json:"ts"`
-	CPU      float64 `json:"cpu"`
-	Mem      float64 `json:"mem"`
-	Disk     float64 `json:"disk"`
-	DiskIO   float64 `json:"disk_io"`
-	NetIn    float64 `json:"net_in"`
-	NetOut   float64 `json:"net_out"`
-	Fan      float64 `json:"fan"`
+	DeviceID int    `json:"device_id"`
+	TS       string `json:"ts"`
+	CPU      int8   `json:"cpu"`
+	Mem      int8   `json:"mem"`
+	Disk     int8   `json:"disk"`
+	DiskIO   int8   `json:"disk_io"`
+	NetIn    int8   `json:"net_in"`
+	NetOut   int8   `json:"net_out"`
+	Fan      int8   `json:"fan"`
 }
 
 func Generate(id int, t time.Time, r *rand.Rand) Sample {
-	base := func(phase float64, mean float64) float64 {
+	base := func(phase float64, mean float64) int8 {
 		v := mean + 18*math.Sin(float64(t.Unix())/900+phase) + r.NormFloat64()*2.5
 		return clamp(v)
 	}
@@ -36,12 +36,12 @@ func Generate(id int, t time.Time, r *rand.Rand) Sample {
 	}
 }
 
-func clamp(v float64) float64 {
+func clamp(v float64) int8 {
 	if v < 0 {
 		return 0
 	}
 	if v > 100 {
 		return 100
 	}
-	return math.Round(v*100) / 100
+	return int8(math.Round(v))
 }

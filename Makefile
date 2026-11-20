@@ -40,7 +40,8 @@ vet:
 	$(GO_RUN) go vet -mod=readonly ./...
 
 up:
-	$(COMPOSE) up -d --build --wait --wait-timeout 240
+	$(COMPOSE) build api nginx
+	$(COMPOSE) up -d --no-build --wait --wait-timeout 240
 
 down:
 	$(COMPOSE) down --remove-orphans
@@ -56,7 +57,7 @@ migrate:
 
 seed-year:
 	$(COMPOSE) build api
-	$(COMPOSE) run --rm seed-year
+	$(COMPOSE) run --no-deps --rm seed-year
 
 smoke:
 	bash scripts/compose-test.sh smoke

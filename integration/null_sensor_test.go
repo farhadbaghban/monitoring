@@ -84,7 +84,7 @@ func TestNullableSensorsThroughCompose(t *testing.T) {
 			t.Fatalf("ingest acknowledgement: %s", body)
 		}
 	}
-	post(ts, `,"cpu":null,"mem":0,"disk":101.25`)
+	post(ts, `,"cpu":null,"mem":0,"disk":100`)
 	post(ts.Add(time.Second), `,"cpu":null,"mem":null,"disk":null,"disk_io":null,"net_in":null,"net_out":null,"fan":null`)
 
 	for i := 0; i < 2; i++ {
@@ -113,8 +113,8 @@ func TestNullableSensorsThroughCompose(t *testing.T) {
 					t.Fatal("mem=0 must be stored as zero")
 				}
 			case i == 0 && j == 2:
-				if value == nil || *value != 10125 {
-					t.Fatal("disk=101.25 must be stored as 10125")
+				if value == nil || *value != 10000 {
+					t.Fatal("disk=100 must be stored as 10000")
 				}
 			case value != nil:
 				t.Errorf("row %d, sensor column %d: got %d, want SQL NULL", i, j, *value)
@@ -145,7 +145,7 @@ func TestNullableSensorsThroughCompose(t *testing.T) {
 		t.Fatalf("expected two raw buckets starting at %s, got tier=%s ts=%v", ts, result.Tier, result.TS)
 	}
 	for _, sensor := range []string{"cpu", "mem", "disk", "disk_io", "net_in", "net_out", "fan"} {
-		want := map[string]float64{"mem": 0, "disk": 101.25}
+		want := map[string]float64{"mem": 0, "disk": 100}
 		series := result.Series[sensor]
 		if len(series.Count) < 2 || len(series.Min) < 2 || len(series.Avg) < 2 || len(series.Max) < 2 {
 			t.Fatalf("missing buckets for sensor %s: %+v", sensor, series)
@@ -188,8 +188,8 @@ func TestNullableSensorsThroughCompose(t *testing.T) {
 				t.Errorf("mem rollup must contain one zero reading")
 			}
 		case "disk":
-			if series.Count[0] != 1 || !matches(series.Avg[0], 101.25) {
-				t.Errorf("disk rollup must contain one reading of 101.25")
+			if series.Count[0] != 1 || !matches(series.Avg[0], 100) {
+				t.Errorf("disk rollup must contain one reading of 100")
 			}
 		}
 	}

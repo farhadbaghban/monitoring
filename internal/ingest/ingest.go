@@ -162,17 +162,17 @@ func encodeSample(smp model.Sample) (model.WireSample, error) {
 	if err != nil {
 		return model.WireSample{}, errors.New("ts must be RFC3339")
 	}
-	vals := []*float64{smp.CPU, smp.Mem, smp.Disk, smp.DiskIO, smp.NetIn, smp.NetOut, smp.Fan}
+	vals := []*int8{smp.CPU, smp.Mem, smp.Disk, smp.DiskIO, smp.NetIn, smp.NetOut, smp.Fan}
 	var out [7]*int16
 	for i, v := range vals {
 		if v == nil {
 			continue
 		}
-		scaled := math.Round(*v * 100)
-		if scaled < math.MinInt16 || scaled > math.MaxInt16 {
-			return model.WireSample{}, fmt.Errorf("sensor %s cannot be stored with two decimal places", model.Sensors[i])
+		if *v < 0 || *v > 100 {
+			return model.WireSample{}, fmt.Errorf("sensor %s must be between 0 and 100", model.Sensors[i])
 		}
-		n := int16(scaled)
+		// Preserve the storage and queue format used by existing data.
+		n := int16(*v) * 100
 		out[i] = &n
 	}
 	return model.WireSample{

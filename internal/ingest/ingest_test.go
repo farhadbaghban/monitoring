@@ -57,7 +57,7 @@ func newServer(t *testing.T, fp *fakeProducer, walMax int64) *Server {
 	return New(fp, w, "secret", "internal", walMax, log)
 }
 
-func body(ts time.Time, v float64) string {
+func body(ts time.Time, v int8) string {
 	return fmt.Sprintf(`{"device_id":1,"ts":%q,"cpu":%v,"mem":%v,"disk":%v,"disk_io":%v,"net_in":%v,"net_out":%v,"fan":%v}`,
 		ts.UTC().Format(time.RFC3339Nano), v, v, v, v, v, v, v)
 }
@@ -73,14 +73,14 @@ func do(s *Server, path, key, payload string) *httptest.ResponseRecorder {
 func TestIngestOK(t *testing.T) {
 	fp := &fakeProducer{}
 	s := newServer(t, fp, 1<<20)
-	rr := do(s, "/v1/ingest", "secret", fmt.Sprintf(`{"device_id":1,"ts":%q,"cpu":null,"mem":0,"disk":101.5}`, time.Now().Add(-48*time.Hour).Format(time.RFC3339Nano)))
+	rr := do(s, "/v1/ingest", "secret", fmt.Sprintf(`{"device_id":1,"ts":%q,"cpu":null,"mem":0,"disk":100}`, time.Now().Add(-48*time.Hour).Format(time.RFC3339Nano)))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rr.Code, rr.Body.String())
 	}
 	if fp.produced != 1 {
 		t.Fatalf("produced %d", fp.produced)
 	}
-	for _, field := range []string{`"cpu":null`, `"fan":null`, `"mem":0`, `"disk":10150`} {
+	for _, field := range []string{`"cpu":null`, `"fan":null`, `"mem":0`, `"disk":10000`} {
 		if !strings.Contains(string(fp.value), field) {
 			t.Errorf("published sample is missing %s: %s", field, fp.value)
 		}
@@ -117,6 +117,12 @@ func TestIngestValidation(t *testing.T) {
 	s := newServer(t, &fakeProducer{}, 1<<20)
 	if rr := do(s, "/v1/ingest", "secret", `{"device_id":1,"ts":"nope"}`); rr.Code != http.StatusBadRequest {
 		t.Errorf("bad timestamp: status %d", rr.Code)
+	}
+	for _, value := range []string{"-1", "101", "12.5", "128"} {
+		payload := fmt.Sprintf(`{"device_id":1,"ts":%q,"cpu":%s}`, time.Now().Format(time.RFC3339Nano), value)
+		if rr := do(s, "/v1/ingest", "secret", payload); rr.Code != http.StatusBadRequest {
+			t.Errorf("cpu=%s: status %d, want 400", value, rr.Code)
+		}
 	}
 }
 
