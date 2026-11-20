@@ -26,14 +26,23 @@ CREATE TABLE IF NOT EXISTS metrics_raw (
 );
 
 -- Upgrade existing installations whose sensor columns were required.
-ALTER TABLE metrics_raw
-    ALTER COLUMN cpu DROP NOT NULL,
-    ALTER COLUMN mem DROP NOT NULL,
-    ALTER COLUMN disk DROP NOT NULL,
-    ALTER COLUMN disk_io DROP NOT NULL,
-    ALTER COLUMN net_in DROP NOT NULL,
-    ALTER COLUMN net_out DROP NOT NULL,
-    ALTER COLUMN fan DROP NOT NULL;
+-- Skip ALTER entirely once upgraded: TimescaleDB propagates it to all chunks.
+DO $$
+DECLARE
+    changes text;
+BEGIN
+    SELECT string_agg(format('ALTER COLUMN %I DROP NOT NULL', attname), ', ' ORDER BY attnum)
+    INTO changes
+    FROM pg_attribute
+    WHERE attrelid = 'metrics_raw'::regclass
+      AND attname IN ('cpu', 'mem', 'disk', 'disk_io', 'net_in', 'net_out', 'fan')
+      AND attnotnull
+      AND NOT attisdropped;
+
+    IF changes IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE metrics_raw ' || changes;
+    END IF;
+END $$;
 
 -- ADR-013: 1-day chunks are too large at 10k devices; use 6-hour chunks.
 SELECT create_hypertable('metrics_raw', 'ts',
