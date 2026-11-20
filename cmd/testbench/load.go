@@ -128,24 +128,33 @@ func loadStages(start, max int) []int {
 	return stages
 }
 
-// Send a sparse but year-long device history through backfill and refresh.
+const (
+	yearSpan   = 365 * 24 * time.Hour
+	yearStep   = 4 * time.Hour
+	yearPoints = int(yearSpan / yearStep)
+)
+
+// Seed every bucket used by the one-year chart, including the oldest one.
 func seedYearChart(ctx context.Context, device int) (time.Time, error) {
-	to := time.Now().UTC().Truncate(4 * time.Hour)
+	to := time.Now().UTC().Truncate(yearStep)
+	from := to.Add(-yearSpan)
 	rng := rand.New(rand.NewSource(int64(device)))
-	var samples []simdata.Sample
-	for at := to.Add(-364 * 24 * time.Hour); at.Before(to); at = at.Add(7 * 24 * time.Hour) {
+	samples := make([]simdata.Sample, 0, yearPoints)
+	timestamps := make([]time.Time, 0, yearPoints)
+	for at := from; at.Before(to); at = at.Add(yearStep) {
 		samples = append(samples, simdata.Generate(device, at, rng))
+		timestamps = append(timestamps, at)
 	}
-	for at := to.Add(-3 * 24 * time.Hour); at.Before(to); at = at.Add(4 * time.Hour) {
-		samples = append(samples, simdata.Generate(device, at, rng))
-	}
-	body, err := json.Marshal(samples)
-	if err != nil {
-		return to, err
-	}
-	status, _, response, err := request(ctx, http.MethodPost, "http://nginx/internal/backfill", string(body))
-	if err != nil || status != 200 {
-		return to, fmt.Errorf("prepare year chart: HTTP %d, %v: %s", status, err, response)
+	const batchSize = 500
+	for i := 0; i < len(samples); i += batchSize {
+		body, err := json.Marshal(samples[i:min(i+batchSize, len(samples))])
+		if err != nil {
+			return to, err
+		}
+		status, _, response, err := request(ctx, http.MethodPost, "http://nginx/internal/backfill", string(body))
+		if err != nil || status != http.StatusOK {
+			return to, fmt.Errorf("prepare year chart: HTTP %d, %v: %s", status, err, response)
+		}
 	}
 	db, err := openDB(ctx)
 	if err != nil {
@@ -154,7 +163,7 @@ func seedYearChart(ctx context.Context, device int) (time.Time, error) {
 	defer db.Close(context.Background())
 	for {
 		var stored int
-		if err := db.QueryRow(ctx, `SELECT count(*) FROM metrics_raw WHERE device_id=$1`, device).Scan(&stored); err != nil {
+		if err := db.QueryRow(ctx, `SELECT count(*) FROM metrics_raw WHERE device_id=$1 AND ts=ANY($2::timestamptz[])`, device, timestamps).Scan(&stored); err != nil {
 			return to, err
 		}
 		if stored == len(samples) {
@@ -166,14 +175,14 @@ func seedYearChart(ctx context.Context, device int) (time.Time, error) {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	// Only this disposable database has year-old raw samples. The normal
-	// refresh endpoint never recomputes data outside the raw retention window.
+	// The regular refresh endpoint only refreshes the recent raw retention window.
 	for _, view := range []string{"metrics_1m", "metrics_5m", "metrics_1h", "metrics_4h"} {
-		if _, err := db.Exec(ctx, `CALL refresh_continuous_aggregate($1::text::regclass, $2::timestamptz, $3::timestamptz)`, view, to.Add(-365*24*time.Hour), to); err != nil {
+		if _, err := db.Exec(ctx, `CALL refresh_continuous_aggregate($1::text::regclass, $2::timestamptz, $3::timestamptz)`, view, from, to); err != nil {
 			return to, fmt.Errorf("refresh %s: %w", view, err)
 		}
 	}
-	return to, chart(ctx, device, to)
+	// Keep the same buckets while avoiding a cached response from a previous seed.
+	return to, chart(ctx, device, to.Add(time.Duration(time.Now().Nanosecond())))
 }
 
 var chartSequence atomic.Int64
@@ -201,7 +210,7 @@ func chart(ctx context.Context, id int, to time.Time) error {
 			populated++
 		}
 	}
-	if result.Tier != "4h" || len(result.TS) < 2190 || len(counts) != len(result.TS) || populated < 60 {
+	if result.Tier != "4h" || len(result.TS) < yearPoints || len(counts) != len(result.TS) || populated < yearPoints {
 		return fmt.Errorf("incomplete year chart: tier %q, %d points, %d populated", result.Tier, len(result.TS), populated)
 	}
 

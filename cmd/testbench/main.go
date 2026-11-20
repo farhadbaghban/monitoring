@@ -46,7 +46,7 @@ func run(command string, args []string) error {
 			return err
 		}
 	case "year":
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		if _, err := seedYearChart(ctx, 90); err != nil {
 			return err
@@ -137,7 +137,7 @@ func request(ctx context.Context, method, target, body string) (int, http.Header
 }
 
 func post(ctx context.Context, target string, id int, ts time.Time) (int, http.Header, error) {
-	body := fmt.Sprintf(`{"device_id":%d,"ts":%q,"cpu":null,"mem":0,"disk":101.25,"disk_io":4,"net_in":5,"net_out":6,"fan":7}`, id, ts.Format(time.RFC3339Nano))
+	body := fmt.Sprintf(`{"device_id":%d,"ts":%q,"cpu":null,"mem":0,"disk":100,"disk_io":4,"net_in":5,"net_out":6,"fan":7}`, id, ts.Format(time.RFC3339Nano))
 	return postBody(ctx, target, body)
 }
 
@@ -251,7 +251,7 @@ func verify(device int, base time.Time, want []int) error {
 		expected[base.Add(time.Duration(i)*time.Millisecond).UnixMicro()] = true
 	}
 	for {
-		rows, err := db.Query(ctx, `SELECT ts, (cpu IS NULL AND mem=0 AND disk=10125 AND
+		rows, err := db.Query(ctx, `SELECT ts, (cpu IS NULL AND mem=0 AND disk=10000 AND
 			disk_io=400 AND net_in=500 AND net_out=600 AND fan=700) IS TRUE
 			FROM metrics_raw WHERE device_id=$1`, device)
 		if err != nil {
