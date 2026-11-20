@@ -244,6 +244,7 @@ services:
     restart: always
 
   seed-year:
+    profiles: ["fixture"]
     image: monitoring-app:local
     command: ["testbench", "year"]
     environment:
